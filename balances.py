@@ -2,11 +2,17 @@ import os
 import csv
 import locale
 from tabulate import tabulate
+import decimal
 
 
 # generic function to clear the terminal
 def clearScreen():
     os.system("cls" if os.name == "nt" else "clear")
+
+
+# convert string to decimal with precision
+def decimalize(v):
+    return decimal.Decimal(v.replace(',', '')).quantize(decimal.Decimal(f"0.{'0' * 18}"))
 
 
 # function to select the file to parse from the import directory
@@ -51,16 +57,16 @@ def balancesheet():
     if len(owner) < 42:
         print("The wallet address you entered is not valid.")
         exit()
-    fname = input("\nExport filename (without extension):\n> ")
     print("\nParsing file...\n")
-    # etherscan exports with english decimal separator
-    locale.setlocale(locale.LC_ALL, 'en_US')
     with open(filepath, "r") as f:
         dialect = csv.Sniffer().sniff(f.read(), delimiters=",;| ")
         f.seek(0)
         balancereader = csv.DictReader(f, dialect=dialect)
         if "Value_IN(ETH)" in balancereader.fieldnames:
             mode = "eth"
+        elif "Quantity" in balancereader.fieldnames:
+            mode = "erc20_specific"
+            symbol = input("Token symbol:\n> ").strip().upper()
         else:
             mode = "erc20"
         dates = []
@@ -75,20 +81,24 @@ def balancesheet():
             # etherscan exports for transactions and token transfers are different
             if mode == "eth":
                 token = "ETH"
-                valuein = locale.atof(row["Value_IN(ETH)"])
-                valueout = locale.atof(row["Value_OUT(ETH)"])
+                valuein = decimalize(row["Value_IN(ETH)"])
+                valueout = decimalize(row["Value_OUT(ETH)"])
+            elif mode == "erc20_specific":
+                token = symbol
+                valuein = decimalize(row["Quantity"])
+                valueout = decimalize(row["Quantity"])
             else:
                 token = row["TokenSymbol"]
-                valuein = locale.atof(row["TokenValue"])
-                valueout = locale.atof(row["TokenValue"])
+                valuein = decimalize(row["TokenValue"])
+                valueout = decimalize(row["TokenValue"])
             if token not in tokens:
                 tokens[token] = {}
             if year not in tokens[token]:
                 tokens[token][year] = {}
                 if "in" not in tokens[token][year]:
-                    tokens[token][year]["in"] = float("0")
+                    tokens[token][year]["in"] = decimalize("0")
                 if "out" not in tokens[token][year]:
-                    tokens[token][year]["out"] = float("0")
+                    tokens[token][year]["out"] = decimalize("0")
             if incoming:
                 tokens[token][year]["in"] += valuein
             else:
@@ -97,7 +107,6 @@ def balancesheet():
         for year in dates:
             exportheader.extend((year + " In", year + " Out", year + " Flow"))
     total = {}
-    headerextend = []
     for name, data in sorted(tokens.items(), key=lambda x: x[0].casefold()):
         balances = [name]
         for year in dates:
@@ -114,9 +123,11 @@ def balancesheet():
     exportheader.append("Balance")
     if mode == "eth":
         suffix = "_eth.csv"
+    elif mode == "erc20_specific":
+        suffix = "_" + symbol + ".csv"
     else:
         suffix = "_erc20.csv"
-    with open(os.path.join("export", fname + suffix), "w", encoding="UTF-8", newline="") as f:
+    with open(os.path.join("export", owner + suffix), "w", encoding="UTF-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(exportheader)
         writer.writerows(table)
@@ -133,8 +144,19 @@ def cta():
         init()
 
 
+# create directories if they don't exist
+def directorysetup():
+    try:
+        os.makedirs("import", exist_ok=True)
+        os.makedirs("export", exist_ok=True)
+    except OSError:
+        print("Creation of the directories failed")
+        exit()
+
+
 # begin program
 def init():
+    directorysetup()
     balancesheet()
     cta()
 
