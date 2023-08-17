@@ -4,9 +4,6 @@ from tabulate import tabulate
 import decimal
 
 
-owner = ""
-
-
 # generic function to clear the terminal
 def clearScreen():
     os.system("cls" if os.name == "nt" else "clear")
@@ -56,6 +53,10 @@ def balancesheet():
     mode = ""
     suffix = ""
     filepath = importfile()
+    owner = input("Focus on wallet:\n> ")
+    if len(owner) < 42:
+        print("The wallet address you entered is not valid.")
+        exit()
     print("\nParsing file...\n")
     with open(filepath, "r") as f:
         dialect = csv.Sniffer().sniff(f.read(), delimiters=",;| ")
@@ -64,6 +65,7 @@ def balancesheet():
         if "Value_IN(ETH)" in balancereader.fieldnames and "TxTo" not in balancereader.fieldnames:
             mode = "eth"
         elif "TxTo" in balancereader.fieldnames:
+            print("eth_internal")
             mode = "eth_internal"
         elif "Quantity" in balancereader.fieldnames:
             mode = "erc20_specific"
@@ -93,14 +95,21 @@ def balancesheet():
             if str(year) not in dates:
                 dates.append(str(year))
             # etherscan exports for transactions and token transfers are different
-            if mode == "eth" or mode == "eth_internal":
-                token = "ETH"
-                valuein = decimalize(row["Value_IN(ETH)"])
             if mode == "eth":
-                valueout = decimalize(row["Value_OUT(ETH)"]) + decimalize(row["TxnFee(ETH)"])
+                token = "ETH"
+                if row["Status"] == "":
+                    valuein = decimalize(row["Value_IN(ETH)"])
+                    valueout = decimalize(row["Value_OUT(ETH)"]) + decimalize(row["TxnFee(ETH)"])
+                else:
+                    valuein = decimalize("0")
+                    valueout = decimalize(row["TxnFee(ETH)"])
             if mode == "eth_internal":
-                if row["ParentTxFrom"].lower() == owner.lower():
-                    valueout = decimalize(row["Value_OUT(ETH)"]) + decimalize(row["ParentTxETH_Value"])
+                token = "ETH"
+                if row["Status"] == "0":
+                    valuein = decimalize(row["Value_IN(ETH)"])
+                else:
+                    valuein = decimalize("0")
+                valueout = decimalize(row["Value_OUT(ETH)"])
             if mode == "erc20_specific":
                 token = symbol
                 valuein = decimalize(row["Quantity"])
@@ -143,9 +152,9 @@ def balancesheet():
         writer = csv.writer(f)
         writer.writerow(exportheader)
         writer.writerows(table)
+    clearScreen()
     print(tabulate(table, headers=exportheader))
-    tokens = {}
-    cta(False)
+    cta()
 
 
 # parse and merge multiple files
@@ -154,6 +163,10 @@ def merge():
     files = []
     header = []
     tokens = []
+    owner = input("Focus on wallet:\n> ")
+    if len(owner) < 42:
+        print("The wallet address you entered is not valid.")
+        exit()
     def selection():
         clearScreen()
         print("\nSelected files to merge: ", files)
@@ -187,16 +200,12 @@ def merge():
         writer = csv.writer(f)
         writer.writerow(header)
         writer.writerows(tokens)
+    clearScreen()
     print(tabulate(tokens, headers=header))
-    cta(False)
+    cta()
 
 # select script mode
-def cta(askOwner=True):
-    if askOwner:
-        owner = input("Focus on wallet:\n> ")
-        if len(owner) < 42:
-            print("The wallet address you entered is not valid.")
-            exit()
+def cta():
     print("\n[P]arse etherscan files | [M]erge parsed files | [Q]uit")
     userAction = input("> ").strip().lower()
     if userAction == "q":
@@ -206,7 +215,7 @@ def cta(askOwner=True):
     elif userAction == "p":
         init()
     else:
-        cta(False)
+        cta()
 
 
 # create directories if they don't exist
