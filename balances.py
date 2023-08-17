@@ -1,9 +1,7 @@
 import os
 import csv
-import locale
 from tabulate import tabulate
 import decimal
-import pandas as pd
 
 
 owner = ""
