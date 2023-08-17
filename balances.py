@@ -3,6 +3,10 @@ import csv
 import locale
 from tabulate import tabulate
 import decimal
+import pandas as pd
+
+
+owner = ""
 
 
 # generic function to clear the terminal
@@ -16,10 +20,10 @@ def decimalize(v):
 
 
 # function to select the file to parse from the import directory
-def importfile():
+def importfile(dir="import"):
     i = 0
     print("Select file to parse:\n")
-    fileList = [f for f in os.listdir("import") if os.path.isfile(os.path.join("import", f))]
+    fileList = [f for f in os.listdir(dir) if os.path.isfile(os.path.join(dir, f))]
     if len(fileList) == 0:
         print("No files found in import folder. Please add a file and try again.")
         print("Use https://etherscan.io/exportData to generate the CSV file.")
@@ -37,7 +41,7 @@ def importfile():
             fileName = fileList[selection]
     except:
         raise
-    filepath = os.path.join(os.getcwd(), "import", fileName)
+    filepath = os.path.join(os.getcwd(), dir, fileName)
     if not os.path.isfile(filepath):
         print("      File not found")
         exit()
@@ -47,50 +51,29 @@ def importfile():
 # function to parse the file and generate the balancesheet
 def balancesheet():
     clearScreen()
+    weth = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
     table = []
     exportheader = ["Token"]
     tokens = {}
     mode = ""
     suffix = ""
     filepath = importfile()
-    owner = input("Focus on wallet:\n> ")
-    if len(owner) < 42:
-        print("The wallet address you entered is not valid.")
-        exit()
     print("\nParsing file...\n")
     with open(filepath, "r") as f:
         dialect = csv.Sniffer().sniff(f.read(), delimiters=",;| ")
         f.seek(0)
         balancereader = csv.DictReader(f, dialect=dialect)
-        if "Value_IN(ETH)" in balancereader.fieldnames:
+        if "Value_IN(ETH)" in balancereader.fieldnames and "TxTo" not in balancereader.fieldnames:
             mode = "eth"
+        elif "TxTo" in balancereader.fieldnames:
+            mode = "eth_internal"
         elif "Quantity" in balancereader.fieldnames:
             mode = "erc20_specific"
             symbol = input("Token symbol:\n> ").strip().upper()
         else:
             mode = "erc20"
         dates = []
-        for row in balancereader:
-            if row["From"].lower() == owner.lower():
-                incoming = False
-            else:
-                incoming = True
-            year = int(row["DateTime (UTC)"][0:4])
-            if str(year) not in dates:
-                dates.append(str(year))
-            # etherscan exports for transactions and token transfers are different
-            if mode == "eth":
-                token = "ETH"
-                valuein = decimalize(row["Value_IN(ETH)"])
-                valueout = decimalize(row["Value_OUT(ETH)"])
-            elif mode == "erc20_specific":
-                token = symbol
-                valuein = decimalize(row["Quantity"])
-                valueout = decimalize(row["Quantity"])
-            else:
-                token = row["TokenSymbol"]
-                valuein = decimalize(row["TokenValue"])
-                valueout = decimalize(row["TokenValue"])
+        def processdata(token, year, valuein, valueout, incoming):
             if token not in tokens:
                 tokens[token] = {}
             if year not in tokens[token]:
@@ -103,6 +86,35 @@ def balancesheet():
                 tokens[token][year]["in"] += valuein
             else:
                 tokens[token][year]["out"] -= valueout
+        for row in balancereader:
+            if row["From"].lower() == owner.lower():
+                incoming = False
+            else:
+                incoming = True
+            year = int(row["DateTime (UTC)"][0:4])
+            if str(year) not in dates:
+                dates.append(str(year))
+            # etherscan exports for transactions and token transfers are different
+            if mode == "eth" or mode == "eth_internal":
+                token = "ETH"
+                valuein = decimalize(row["Value_IN(ETH)"])
+            if mode == "eth":
+                valueout = decimalize(row["Value_OUT(ETH)"]) + decimalize(row["TxnFee(ETH)"])
+            if mode == "eth_internal":
+                if row["ParentTxFrom"].lower() == owner.lower():
+                    valueout = decimalize(row["Value_OUT(ETH)"]) + decimalize(row["ParentTxETH_Value"])
+            if mode == "erc20_specific":
+                token = symbol
+                valuein = decimalize(row["Quantity"])
+                valueout = decimalize(row["Quantity"])
+            if mode == "erc20":
+                token = row["TokenSymbol"]
+                valuein = decimalize(row["TokenValue"])
+                valueout = decimalize(row["TokenValue"])
+            processdata(token, year, valuein, valueout, incoming)
+            if mode == "eth": 
+                if row["To"].lower() == weth and row["Method"] == "Deposit":
+                    processdata("WETH", year, decimalize(row["Value_OUT(ETH)"]), decimalize(row["Value_OUT(ETH)"]), True)
         dates.sort()
         for year in dates:
             exportheader.extend((year + " In", year + " Out", year + " Flow"))
@@ -123,6 +135,8 @@ def balancesheet():
     exportheader.append("Balance")
     if mode == "eth":
         suffix = "_eth.csv"
+    elif mode == "eth_internal":
+        suffix = "_eth_internal.csv"
     elif mode == "erc20_specific":
         suffix = "_" + symbol + ".csv"
     else:
@@ -132,16 +146,69 @@ def balancesheet():
         writer.writerow(exportheader)
         writer.writerows(table)
     print(tabulate(table, headers=exportheader))
+    tokens = {}
+    cta(False)
 
 
-# rerun the script or quit
-def cta():
-    print("\nAll done. Press Q to quit or any other key to parse another file.")
+# parse and merge multiple files
+def merge():
+    clearScreen()
+    files = []
+    header = []
+    tokens = []
+    def selection():
+        clearScreen()
+        print("\nSelected files to merge: ", files)
+        files.append(importfile("export"))
+        print("\nPress M to begin merging or any other key to parse another file.")
+        userAction = input("> ").strip().lower()
+        if userAction != "m":
+            selection()
+        if len(files) < 2:
+            selection()
+    selection()
+    for file in files:
+        with open(file, "r") as f:
+            dialect = csv.Sniffer().sniff(f.read(), delimiters=",;| ")
+            f.seek(0)
+            reader = csv.DictReader(f, dialect=dialect)
+            if len(header) == 0:
+                header = reader.fieldnames
+            for row in reader:
+                if not any(row["Token"] in sl for sl in tokens):
+                    data = []
+                    for v in row.values():
+                        data.append(v)
+                    tokens.append(data)
+                else:
+                    for token in tokens:
+                        if token[0] == row["Token"]:
+                            for i in range(1, len(header)):
+                                token[i] = decimalize(token[i]) + decimalize(row[header[i]])
+    with open(os.path.join("export", owner + "_merged.csv"), "w", encoding="UTF-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(tokens)
+    print(tabulate(tokens, headers=header))
+    cta(False)
+
+# select script mode
+def cta(askOwner=True):
+    if askOwner:
+        owner = input("Focus on wallet:\n> ")
+        if len(owner) < 42:
+            print("The wallet address you entered is not valid.")
+            exit()
+    print("\n[P]arse etherscan files | [M]erge parsed files | [Q]uit")
     userAction = input("> ").strip().lower()
     if userAction == "q":
         exit()
-    else:
+    elif userAction == "m":
+        merge()
+    elif userAction == "p":
         init()
+    else:
+        cta(False)
 
 
 # create directories if they don't exist
@@ -158,9 +225,8 @@ def directorysetup():
 def init():
     directorysetup()
     balancesheet()
-    cta()
 
 
 # only run program if executed directly
 if __name__ == "__main__":
-    init()
+    cta()
