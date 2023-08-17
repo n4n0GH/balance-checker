@@ -65,7 +65,6 @@ def balancesheet():
         if "Value_IN(ETH)" in balancereader.fieldnames and "TxTo" not in balancereader.fieldnames:
             mode = "eth"
         elif "TxTo" in balancereader.fieldnames:
-            print("eth_internal")
             mode = "eth_internal"
         elif "Quantity" in balancereader.fieldnames:
             mode = "erc20_specific"
